@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Int Array → 可下载文件</title>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; max-width:900px; margin:28px auto; padding:0 16px; color:#111; }
+    h1 { font-size:20px; margin-bottom:6px; }
+    .row { display:flex; gap:8px; align-items:center; margin:8px 0; flex-wrap:wrap; }
+    textarea { width:100%; height:140px; font-family: monospace; font-size:13px; padding:8px; box-sizing:border-box; }
+    label { font-size:13px; }
+    select,input[type="text"] { padding:6px 8px; font-size:13px; }
+    button { padding:8px 12px; font-size:14px; border-radius:6px; cursor:pointer; }
+    .info { margin-top:10px; color:#444; font-size:13px; }
+    pre { background:#f7f7f8; padding:10px; border-radius:6px; overflow:auto; }
+  </style>
+</head>
+<body>
+  <h1>将整数数组导出为文件（二进制或文本）</h1>
+
+  <div class="info">
+    输入格式示例：<code>[1,2,3,255]</code> 或 <code>1,2,3,255</code> 或 每行一个数字。支持负数（用于有符号类型）。
+  </div>
+
+  <textarea id="inputArray" placeholder='在此输入整数数组，例如: [1,2,3,255] 或 1,2,3,255 或 每行一个数字'>[0,1,2,3,255,256,-1]</textarea>
+
+  <div class="row">
+    <label>输出格式：</label>
+    <select id="format">
+      <option value="binary">二进制（TypedArray）</option>
+      <option value="text">文本（每行一个数）</option>
+    </select>
+
+    <label>整数类型：</label>
+    <select id="intType">
+      <option value="Uint8">Uint8</option>
+      <option value="Int8">Int8</option>
+      <option value="Uint16">Uint16</option>
+      <option value="Int16">Int16</option>
+      <option value="Uint32">Uint32</option>
+      <option value="Int32" selected>Int32</option>
+    </select>
+
+    <label>字节序：</label>
+    <select id="endianness">
+      <option value="little">Little-endian</option>
+      <option value="big">Big-endian</option>
+    </select>
+
+    <label>文件名：</label>
+    <input id="fileName" type="text" value="data.bin" />
+  </div>
+
+  <div class="row">
+    <button id="downloadBtn">生成并下载</button>
+    <button id="previewBtn">预览（十六进制前 64 字节）</button>
+  </div>
+
+  <div id="status" class="info"></div>
+
+  <h3>十六进制预览</h3>
+  <pre id="hexPreview">（点击「预览」查看）</pre>
+
+  <script>
+    // Helper: parse input string to number array
+    function parseInput(text) {
+      text = text.trim();
+      if (!text) return [];
+      try {
+        // try parse JSON array first
+        if (/^\s*\[.*\]\s*$/.test(text)) {
+          const arr = JSON.parse(text);
+          if (!Array.isArray(arr)) throw new Error('不是数组');
+          return arr.map(Number);
+        }
+        // else split by commas or newlines
+        const parts = text.split(/[\r\n,]+/).map(s => s.trim()).filter(Boolean);
+        return parts.map(Number);
+      } catch (e) {
+        // fallback: extract numbers with regex
+        const nums = text.match(/-?\d+/g) || [];
+        return nums.map(Number);
+      }
+    }
+
+    // Create ArrayBuffer from numbers according to selected typed type and endianness
+    function numbersToArrayBuffer(numbers, type, littleEndian) {
+      const count = numbers.length;
+      let bytesPer = 1;
+      let setterName = null;
+      switch (type) {
+        case 'Uint8': bytesPer = 1; setterName = 'setUint8'; break;
+        case 'Int8':  bytesPer = 1; setterName = 'setInt8'; break;
+        case 'Uint16': bytesPer = 2; setterName = 'setUint16'; break;
+        case 'Int16': bytesPer = 2; setterName = 'setInt16'; break;
+        case 'Uint32': bytesPer = 4; setterName = 'setUint32'; break;
+        case 'Int32': bytesPer = 4; setterName = 'setInt32'; break;
+        default: throw new Error('未知类型');
+      }
+      const buffer = new ArrayBuffer(count * bytesPer);
+      const view = new DataView(buffer);
+      for (let i = 0; i < count; i++) {
+        const val = numbers[i] || 0;
+        const offset = i * bytesPer;
+        // Use DataView setter for correct bounds and endianness
+        view[setterName](offset, val, littleEndian);
+      }
+      return buffer;
+    }
+
+    // Convert ArrayBuffer to hex string (for preview)
+    function bufferToHex(buffer, maxBytes=64) {
+      const u8 = new Uint8Array(buffer);
+      const len = Math.min(u8.length, maxBytes);
+      let out = '';
+      for (let i = 0; i < len; i++) {
+        out += u8[i].toString(16).padStart(2, '0') + ( (i%16===15) ? '\n' : ' ' );
+      }
+      if (u8.length > maxBytes) out += '\n... (' + (u8.length - maxBytes) + ' bytes more)';
+      return out.trim();
+    }
+
+    function downloadBlob(blob, filename) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename || 'data.bin';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // release after a short time
+      setTimeout(()=> URL.revokeObjectURL(url), 5000);
+    }
+
+    document.getElementById('downloadBtn').addEventListener('click', () => {
+      const text = document.getElementById('inputArray').value;
+      const nums = parseInput(text);
+      if (nums.length === 0) {
+        document.getElementById('status').textContent = '输入数组为空（将生成空文件）。';
+      } else {
+        document.getElementById('status').textContent = '解析到 ' + nums.length + ' 个整数。';
+      }
+
+      const format = document.getElementById('format').value;
+      const fname = (document.getElementById('fileName').value || 'data.bin').trim();
+      if (format === 'text') {
+        // plain text: each number on new line
+        const content = nums.join('\n');
+        const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+        downloadBlob(blob, fname.endsWith('.txt') ? fname : fname + '.txt');
+      } else {
+        // binary
+        const type = document.getElementById('intType').value;
+        const little = document.getElementById('endianness').value === 'little';
+        try {
+          const buffer = numbersToArrayBuffer(nums, type, little);
+          const blob = new Blob([buffer], { type: 'application/octet-stream' });
+          downloadBlob(blob, fname);
+          document.getElementById('status').textContent += ' 已生成二进制，共 ' + buffer.byteLength + ' 字节。';
+        } catch (err) {
+          document.getElementById('status').textContent = '生成失败：' + err.message;
+        }
+      }
+    });
+
+    document.getElementById('previewBtn').addEventListener('click', () => {
+      const text = document.getElementById('inputArray').value;
+      const nums = parseInput(text);
+      const format = document.getElementById('format').value;
+      if (format === 'text') {
+        document.getElementById('hexPreview').textContent = nums.join('\n') || '(空)';
+      } else {
+        try {
+          const buffer = numbersToArrayBuffer(nums, document.getElementById('intType').value, document.getElementById('endianness').value === 'little');
+          document.getElementById('hexPreview').textContent = bufferToHex(buffer, 64);
+        } catch (err) {
+          document.getElementById('hexPreview').textContent = '预览失败：' + err.message;
+        }
+      }
+    });
+
+    // adjust filename default when switching format
+    document.getElementById('format').addEventListener('change', (e) => {
+      const f = e.target.value;
+      const fnameEl = document.getElementById('fileName');
+      if (f === 'text') {
+        if (!fnameEl.value.endsWith('.txt')) fnameEl.value = (fnameEl.value || 'data') .replace(/\.(bin|dat)$/,'') + '.txt';
+      } else {
+        if (!fnameEl.value.match(/\.(bin|dat|raw)$/)) fnameEl.value = (fnameEl.value || 'data') .replace(/\.txt$/,'') + '.bin';
+      }
+    });
+  </script>
+</body>
+</html>

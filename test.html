@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>播放 Base64 音频</title>
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; padding: 20px; max-width: 800px; margin: auto; }
+    textarea { width: 100%; height: 200px; font-family: monospace; padding: 8px; box-sizing: border-box; }
+    .row { display:flex; gap:8px; margin-top:10px; align-items:center; }
+    button { padding:8px 12px; border-radius:6px; border:1px solid #ccc; background:#f7f7f7; cursor:pointer; }
+    .info { margin-top:8px; color:#555; }
+    .error { color:#b00020; }
+    audio { margin-top:12px; width:100%; }
+  </style>
+</head>
+<body>
+  <h2>播放 Base64 音频</h2>
+  <p>在下面的输入框粘贴你的 Base64 音频数据（可以是 <code>data:audio/...;base64,...</code> 格式，也可以是纯 base64 字符串），然后点击“播放”。</p>
+
+  <textarea id="base64Input" placeholder="粘贴 base64 或 data:audio/...;base64,..."></textarea>
+
+  <div class="row">
+    <button id="playBtn">播放 / 确定</button>
+    <button id="stopBtn">停止</button>
+    <button id="clearBtn">清空</button>
+    <select id="mimeSelect" title="如果你粘贴的是纯base64，可在这里选择mime (默认 audio/mpeg)">
+      <option value="audio/mpeg">audio/mpeg (mp3)</option>
+      <option value="audio/wav">audio/wav (wav)</option>
+      <option value="audio/ogg">audio/ogg (ogg)</option>
+      <option value="audio/x-m4a">audio/x-m4a (m4a)</option>
+      <option value="audio/webm">audio/webm (webm)</option>
+    </select>
+    <a id="downloadLink" style="display:none; margin-left:6px;">下载音频</a>
+  </div>
+
+  <div id="message" class="info"></div>
+
+  <audio id="player" controls></audio>
+
+  <script>
+    (function(){
+      const input = document.getElementById('base64Input');
+      const playBtn = document.getElementById('playBtn');
+      const stopBtn = document.getElementById('stopBtn');
+      const clearBtn = document.getElementById('clearBtn');
+      const mimeSelect = document.getElementById('mimeSelect');
+      const msg = document.getElementById('message');
+      const player = document.getElementById('player');
+      const downloadLink = document.getElementById('downloadLink');
+
+      let currentObjectUrl = null;
+
+      function showMessage(text, isError = false) {
+        msg.textContent = text;
+        msg.className = isError ? 'error' : 'info';
+      }
+
+      function revokeCurrentUrl() {
+        if (currentObjectUrl) {
+          try { URL.revokeObjectURL(currentObjectUrl); } catch(e) {}
+          currentObjectUrl = null;
+        }
+      }
+
+      function decodeBase64ToBlob(b64Data, mime) {
+        // atob -> binary string -> Uint8Array -> Blob
+        try {
+          const binaryStr = atob(b64Data);
+          const len = binaryStr.length;
+          const bytes = new Uint8Array(len);
+          for (let i = 0; i < len; i++) {
+            bytes[i] = binaryStr.charCodeAt(i);
+          }
+          return new Blob([bytes.buffer], { type: mime });
+        } catch (err) {
+          throw new Error('Base64 解码失败（可能包含非 base64 字符或过大）: ' + err.message);
+        }
+      }
+
+      function extractData(inputText) {
+        // 如果是 data:...;base64,xxxx
+        const trimmed = inputText.trim();
+        if (!trimmed) throw new Error('输入为空');
+        const dataUrlMatch = trimmed.match(/^data:([\w\/\-\+\.]+);base64,(.+)$/s);
+        if (dataUrlMatch) {
+          const mime = dataUrlMatch[1];
+          const b64 = dataUrlMatch[2].replace(/\s+/g, '');
+          return { mime, b64 };
+        }
+        // 否则认为是纯 base64（可能包含换行，去掉空白）
+        const pure = trimmed.replace(/\s+/g, '');
+        // 简单校验：只允许 base64 字符
+        if (!/^[A-Za-z0-9+/=]+$/.test(pure)) {
+          throw new Error('看起来不是有效的 base64 字符串，或者包含前缀。请确认输入格式。');
+        }
+        const mime = mimeSelect.value || 'audio/mpeg';
+        return { mime, b64: pure };
+      }
+
+      playBtn.addEventListener('click', () => {
+        showMessage('处理中...');
+        try {
+          const { mime, b64 } = extractData(input.value);
+          // decode to blob
+          const blob = decodeBase64ToBlob(b64, mime);
+          revokeCurrentUrl();
+          const url = URL.createObjectURL(blob);
+          currentObjectUrl = url;
+          player.src = url;
+          player.load();
+          // 尝试播放（部分浏览器会因为未触发用户手势而阻止自动播放）
+          const p = player.play();
+          if (p !== undefined) {
+            p.then(() => {
+              showMessage('开始播放 — MIME: ' + mime);
+            }).catch(err => {
+              // 自动播放被阻止或其他错误：仍然设置好 src，让用户手动点击播放控件
+              showMessage('播放未能自动开始（浏览器限制）。请点击播放器上的播放按钮。 MIME: ' + mime);
+            });
+          } else {
+            showMessage('音频已准备好，请使用播放器播放。 MIME: ' + mime);
+          }
+
+          // 设置下载链接
+          downloadLink.style.display = 'inline-block';
+          downloadLink.href = url;
+          // 根据 mime 选一个合适的扩展名
+          const extMap = {
+            'audio/mpeg': 'mp3',
+            'audio/wav': 'wav',
+            'audio/ogg': 'ogg',
+            'audio/webm': 'webm',
+            'audio/x-m4a': 'm4a'
+          };
+          const ext = extMap[mime] || 'bin';
+          downloadLink.download = 'audio.' + ext;
+          downloadLink.textContent = '下载音频 (' + ext + ')';
+        } catch (err) {
+          showMessage(err.message || String(err), true);
+        }
+      });
+
+      stopBtn.addEventListener('click', () => {
+        try {
+          player.pause();
+          player.currentTime = 0;
+          showMessage('已停止播放');
+        } catch (e) {
+          showMessage('停止失败: ' + e.message, true);
+        }
+      });
+
+      clearBtn.addEventListener('click', () => {
+        input.value = '';
+        player.pause();
+        player.removeAttribute('src');
+        player.load();
+        revokeCurrentUrl();
+        downloadLink.style.display = 'none';
+        showMessage('已清空');
+      });
+
+      // 页面卸载时释放 URL
+      window.addEventListener('beforeunload', () => {
+        revokeCurrentUrl();
+      });
+    })();
+  </script>
+</body>
+</html>

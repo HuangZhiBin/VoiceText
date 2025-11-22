@@ -1,0 +1,7 @@
+{
+  "name": "LinguaFlow Live",
+  "description": "Real-time multi-language speech-to-text and translation using Gemini Live API.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
